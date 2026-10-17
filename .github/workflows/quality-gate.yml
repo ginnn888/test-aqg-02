@@ -1,0 +1,56 @@
+# Experimental installation: existing engine limitations still apply.
+name: Automated Quality Gate
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
+  pull-requests: write
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  quality:
+    if: github.actor != 'dependabot[bot]' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - id: dependencies
+        run: npm ci
+      - name: SonarCloud Scan
+        id: sonar
+        continue-on-error: true
+        uses: SonarSource/sonarqube-scan-action@v6
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      - name: Run Automated Quality Gate
+        id: engine
+        uses: NonnaritRammaneekultawat-6609650459/test-github-marketplace@5ea12ad0ce2beed94a301785040e420de25f3095
+        with:
+          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          sonar_token: ${{ secrets.SONAR_TOKEN }}
+      - name: Run summary
+        if: always()
+        env:
+          DEPENDENCIES: ${{ steps.dependencies.outcome }}
+          SONAR: ${{ steps.sonar.outcome }}
+          ENGINE: ${{ steps.engine.outcome }}
+        run: |
+          echo '## Quality Gate execution' >> "$GITHUB_STEP_SUMMARY"
+          echo "Dependencies: $DEPENDENCIES" >> "$GITHUB_STEP_SUMMARY"
+          echo "Sonar scan: $SONAR" >> "$GITHUB_STEP_SUMMARY"
+          echo "Existing AI engine: $ENGINE" >> "$GITHUB_STEP_SUMMARY"
+          echo 'These are execution outcomes, not a guarantee of completed AI review. See step logs for errors.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Preserve Sonar failure
+        if: always() && steps.sonar.outcome == 'failure'
+        run: exit 1
